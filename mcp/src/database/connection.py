@@ -11,6 +11,7 @@ from typing import (
     Any,
 )
 from contextlib import contextmanager
+import logging
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import QueuePool
@@ -25,7 +26,7 @@ from core.config import (
     Environment,
     settings,
 )
-from core.logging import logger
+logger = logging.getLogger("database")
 
 
 class DatabaseError(Exception):
@@ -83,13 +84,13 @@ class DatabaseService:
             self.engine = create_engine(settings.POSTGRES_URL, **engine_kwargs)
             
             logger.info(
-                "database_engine_initialized",
-                pool_size=settings.POSTGRES_POOL_SIZE,
-                max_overflow=settings.POSTGRES_MAX_OVERFLOW,
+                "database_engine_initialized pool_size=%s max_overflow=%s",
+                settings.POSTGRES_POOL_SIZE,
+                settings.POSTGRES_MAX_OVERFLOW,
             )
 
         except Exception as e:
-            logger.error("database_initialization_error", error=str(e))
+            logger.exception("database_initialization_error: %s", str(e))
             raise
 
     def get_session(self) -> Session:
@@ -112,7 +113,7 @@ class DatabaseService:
         try:
             return Session(self.engine)
         except SQLAlchemyError as e:
-            logger.error("session_creation_error", error=str(e))
+            logger.exception("session_creation_error: %s", str(e))
             raise DatabaseError(
                 message="Could not create database session",
                 status_code=500
@@ -136,7 +137,7 @@ class DatabaseService:
             yield session
         except Exception as e:
             session.rollback()
-            logger.error("session_context_error", error=str(e))
+            logger.exception("session_context_error: %s", str(e))
             raise
         finally:
             session.close()
@@ -156,7 +157,7 @@ class DatabaseService:
             SQLModel.metadata.create_all(self.engine)
             logger.info("database_tables_created")
         except SQLAlchemyError as e:
-            logger.error("table_creation_error", error=str(e))
+            logger.exception("table_creation_error: %s", str(e))
             raise
 
     def drop_tables(self) -> None:
@@ -178,7 +179,7 @@ class DatabaseService:
             SQLModel.metadata.drop_all(self.engine)
             logger.info("database_tables_dropped")
         except SQLAlchemyError as e:
-            logger.error("table_drop_error", error=str(e))
+            logger.exception("table_drop_error: %s", str(e))
             raise
 
     def health_check(self) -> bool:
@@ -197,7 +198,7 @@ class DatabaseService:
                 session.exec(text("SELECT 1"))  # <-- Usar text() para SQLAlchemy
                 return True
         except Exception as e:
-            logger.error("database_health_check_failed", error=str(e))
+            logger.exception("database_health_check_failed: %s", str(e))
             return False
 
     def close_connections(self) -> None:
@@ -212,7 +213,7 @@ class DatabaseService:
                 self.engine.dispose()
                 logger.info("database_connections_closed")
             except Exception as e:
-                logger.error("connection_close_error", error=str(e))
+                logger.exception("connection_close_error: %s", str(e))
 
 
 # Crear una instancia singleton del servicio de base de datos
