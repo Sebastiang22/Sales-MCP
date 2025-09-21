@@ -21,6 +21,7 @@ para facilitar el diagnóstico.
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+import hashlib
 
 try:
     from azure.core.credentials import AzureKeyCredential
@@ -72,6 +73,22 @@ class ProductSearchConfig:
     embedding_model: str = "text-embedding-3-small"
 
 
+def compute_store_id(store_name: str) -> str:
+    """Genera un identificador hash consistente para una tienda.
+
+    Args:
+        store_name: Nombre de la tienda de origen.
+
+    Returns:
+        str: Hash estable (hex) derivado del nombre normalizado de la tienda.
+    """
+    normalized = (store_name or "").strip().lower()
+    if not normalized:
+        return ""
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
 class AzureProductSearchService:
     """Servicio para gestionar el índice de productos en Azure AI Search.
 
@@ -96,7 +113,6 @@ class AzureProductSearchService:
             embedding_model=(config.embedding_model if config else None) or getattr(settings, "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
         )
 
-        import pdb; pdb.set_trace()
         self.config = merged
 
         self._has_azure = all([self.config.service_name, self.config.api_key, self.config.endpoint, self.config.index_name])
@@ -128,6 +144,8 @@ class AzureProductSearchService:
             SearchField(name="name", type=SearchFieldDataType.String, searchable=True, filterable=True, sortable=True),
             SearchField(name="description", type=SearchFieldDataType.String, searchable=True),
             SimpleField(name="price", type=SearchFieldDataType.Double, filterable=True, sortable=True, facetable=True),
+            # store_id es un hash consistente del nombre de la tienda
+            SimpleField(name="store_id", type=SearchFieldDataType.String, filterable=True, facetable=True),
             SearchField(name="store", type=SearchFieldDataType.String, searchable=True, filterable=True, facetable=True),
             SearchField(
                 name="images",
@@ -171,7 +189,11 @@ class AzureProductSearchService:
                     prioritized_fields=SemanticPrioritizedFields(
                         title_field=SemanticField(field_name="name"),
                         content_fields=[SemanticField(field_name="description"), SemanticField(field_name="search_text")],
-                        keywords_fields=[SemanticField(field_name="store"), SemanticField(field_name="tags")],
+                        keywords_fields=[
+                            SemanticField(field_name="store"),
+                            SemanticField(field_name="store_id"),
+                            SemanticField(field_name="tags"),
+                        ],
                     ),
                 )
             ]
@@ -223,6 +245,7 @@ class AzureProductSearchService:
         - descripcion -> description
         - tienda -> store
         - imagenes -> images (lista de URLs)
+        - store_id -> store_id (opcional; si no se provee se calcula)
 
         Además genera `search_text` y opcionalmente `content_vector`.
         """
@@ -239,6 +262,8 @@ class AzureProductSearchService:
         description = (raw.get("descripcion") or "").strip()
         store = (raw.get("tienda") or "").strip()
         price = raw.get("precio_venta")
+        incoming_store_id = (raw.get("store_id") or "").strip()
+        store_id = incoming_store_id or compute_store_id(store)
 
         # search_text compuesto
         search_parts: List[str] = []
@@ -260,6 +285,7 @@ class AzureProductSearchService:
             "name": name,
             "description": description,
             "price": float(price) if price not in (None, "") else None,
+            "store_id": store_id,
             "store": store,
             "images": images,
             "search_text": search_text,
@@ -305,4 +331,4 @@ class AzureProductSearchService:
             return {"success": False, "uploaded": 0, "error": str(e)}
 
 
-__all__ = ["AzureProductSearchService", "ProductSearchConfig"]
+__all__ = ["AzureProductSearchService", "ProductSearchConfig", "compute_store_id"]

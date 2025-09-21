@@ -32,7 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 # Importar el servicio del indexador
-from indexer.src.services.ai_search_service import AzureProductSearchService  # type: ignore
+from indexer.src.services.ai_search_service import AzureProductSearchService, compute_store_id  # type: ignore
 
 
 @dataclass
@@ -129,6 +129,9 @@ def read_products_from_excel(file_path: Path, config: Optional[ExcelReadConfig] 
         except Exception:
             price_value = None
 
+        # Calcular store_id consistente a partir del nombre de tienda
+        store_id_value = compute_store_id(tienda or "")
+
         products.append(
             {
                 "nombre": nombre or "",
@@ -136,6 +139,7 @@ def read_products_from_excel(file_path: Path, config: Optional[ExcelReadConfig] 
                 "descripcion": descripcion or "",
                 "tienda": tienda or "",
                 "imagenes": str(imagenes) if imagenes is not None else "",
+                "store_id": store_id_value,
             }
         )
 
