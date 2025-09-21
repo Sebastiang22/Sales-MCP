@@ -151,6 +151,30 @@ class Settings:
         self.MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2000"))
         self.MAX_LLM_CALL_RETRIES = int(os.getenv("MAX_LLM_CALL_RETRIES", "3"))
 
+        # OpenAI (standard) Embeddings/LLM
+        self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+        self.OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        self.OPENAI_EMBEDDINGS_MODEL = os.getenv("OPENAI_EMBEDDINGS_MODEL", "text-embedding-3-large")
+
+        # Azure OpenAI Embeddings/LLM
+        self.AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+        self.AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+        self.AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "")
+        self.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT = os.getenv(
+            "AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT", ""
+        )
+
+        # Azure Cognitive Search
+        self.AZURE_SEARCH_SERVICE_NAME = os.getenv("AZURE_SEARCH_SERVICE_NAME", "")
+        self.AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT", "")
+        self.AZURE_SEARCH_API_KEY = os.getenv("AZURE_SEARCH_API_KEY", "")
+        self.AZURE_SEARCH_INDEX_NAME = os.getenv("AZURE_SEARCH_INDEX_NAME", "")
+        # Optional helpers for local config
+        self.AZURE_SEARCH_VECTOR_FIELD = os.getenv("AZURE_SEARCH_VECTOR_FIELD", "product_vector")
+        self.AZURE_SEARCH_CONTENT_FIELDS = parse_list_from_env(
+            "AZURE_SEARCH_CONTENT_FIELDS", ["name", "description"]
+        )
+
         # JWT Configuration
         self.JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
         self.JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
