@@ -109,10 +109,16 @@ class AzureAISearchService:
             return None, str(e)
 
     def _build_odata_filter(self, filters: Optional[Dict[str, Any]]) -> Optional[str]:
-        """Construye filtro OData para Azure Search a partir de filtros simples."""
+        """Construye filtro OData para Azure Search a partir de filtros simples.
+
+        Soporta actualmente: store_id (exacto), min_price, max_price, category, in_stock.
+        """
         if not filters:
             return None
         parts: List[str] = []
+        if "store_id" in filters and str(filters["store_id"]).strip():
+            val = str(filters["store_id"]).replace("'", "''")
+            parts.append(f"store_id eq '{val}'")
         if "min_price" in filters:
             parts.append(f"price ge {filters['min_price']}")
         if "max_price" in filters:
@@ -264,6 +270,54 @@ class AzureAISearchService:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(url, headers=headers, json=payload)
             if resp.status_code >= 400:
+                # Fallback: algunos servicios usan 'vectorQueries' (API 2024-07-01)
+                body_text = resp.text.lower()
+                if embeddings and ("vectors" in body_text and "not a valid parameter" in body_text):
+                    try:
+                        api_version_fallback = "2024-07-01"
+                        url_fb = f"{base}/indexes/{self.config.index_name}/docs/search?api-version={api_version_fallback}"
+                        payload_fb: Dict[str, Any] = {
+                            "count": True,
+                            "top": top,
+                        }
+                        if odata_filter:
+                            payload_fb["filter"] = odata_filter
+                        if use_hybrid:
+                            payload_fb["queryType"] = "simple"
+                            payload_fb["search"] = query
+                        payload_fb["vectorQueries"] = [
+                            {
+                                "kind": "vector",
+                                "vector": embeddings,
+                                "fields": vector_field,
+                                "k": top,
+                            }
+                        ]
+                        async with httpx.AsyncClient(timeout=30.0) as client:
+                            resp_fb = await client.post(url_fb, headers=headers, json=payload_fb)
+                        if resp_fb.status_code >= 400:
+                            return {
+                                "error": f"Azure Search error {resp_fb.status_code}: {resp_fb.text}",
+                                "total_count": 0,
+                                "documents": [],
+                                "search_type": search_type,
+                            }
+                        data = resp_fb.json()
+                        docs = data.get("value", [])
+                        total = data.get("@odata.count", len(docs))
+                        return {
+                            "error": None,
+                            "total_count": total or len(docs),
+                            "documents": docs,
+                            "search_type": search_type,
+                        }
+                    except Exception as e_fb:
+                        return {
+                            "error": str(e_fb),
+                            "total_count": 0,
+                            "documents": [],
+                            "search_type": search_type,
+                        }
                 return {
                     "error": f"Azure Search error {resp.status_code}: {resp.text}",
                     "total_count": 0,

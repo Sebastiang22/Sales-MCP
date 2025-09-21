@@ -6,12 +6,17 @@ desde `services` directamente.
 """
 
 from .whatsapp_service import WhatsAppServiceError  # re-export
-from .product_search_service import AzureProductSearchService, ProductSearchConfig
+from .azure_ai_search import (
+    AzureAISearchService,
+    AzureSearchConfig,
+    get_azure_search_service,
+)
 
 __all__ = [
     "WhatsAppServiceError",
-    "AzureProductSearchService",
-    "ProductSearchConfig",
+    "AzureAISearchService",
+    "AzureSearchConfig",
+    "get_azure_search_service",
 ]
 
 
