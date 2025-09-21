@@ -1,8 +1,7 @@
 """
 Herramientas MCP para operaciones de base de datos relacionadas con ventas.
 
-Este módulo registra herramientas MCP para crear registros de ventas de productos,
-incluida la validación de stock y actualización de inventario.
+Este módulo registra herramientas MCP para crear registros de ventas de productos.
 """
 
 from typing import Any, Dict, Optional
@@ -31,10 +30,10 @@ def register_db_tools(server: FastMCP) -> None:
         unit_price: Optional[float] = None,
         customer_address: str = "",
     ) -> Dict[str, Any]:
-        """Registra la venta de un producto y actualiza el inventario.
+        """Registra la venta de un producto.
 
-        Valida la existencia del producto, verifica stock suficiente y crea un
-        registro de venta con el precio unitario indicado o el del producto.
+        Valida la existencia del producto y crea un registro de venta con el
+        precio unitario indicado o el del producto.
 
         Args:
             sku (Optional[str]): SKU del producto a vender. Alternativo a product_id.
@@ -83,12 +82,6 @@ def register_db_tools(server: FastMCP) -> None:
 
                 applied_unit_price = unit_price if unit_price is not None else product.price
 
-                if quantity > product.stock_quantity:
-                    return {
-                        "success": False,
-                        "error": f"Stock insuficiente. Disponible: {product.stock_quantity}, solicitado: {quantity}",
-                    }
-
                 if not product.is_active:
                     return {
                         "success": False,
@@ -104,13 +97,9 @@ def register_db_tools(server: FastMCP) -> None:
                 )
                 sale.update_total()
 
-                product.decrease_stock(quantity)
-
                 session.add(sale)
-                session.add(product)
                 session.commit()
                 session.refresh(sale)
-                session.refresh(product)
 
                 return {
                     "success": True,
@@ -123,12 +112,6 @@ def register_db_tools(server: FastMCP) -> None:
                         "customer_address": sale.customer_address,
                         "created_at": str(sale.created_at) if getattr(sale, "created_at", None) else None,
                     },
-                    "product": {
-                        "id": product.id,
-                        "sku": product.sku,
-                        "remaining_stock": product.stock_quantity,
-                        "is_active": product.is_active,
-                    },
                 }
 
         except Exception as e:
@@ -138,7 +121,7 @@ def register_db_tools(server: FastMCP) -> None:
             }
 
     print("🗄️ Herramientas de base de datos registradas en el servidor MCP")
-    print("   - register_product_sale: Registra venta y actualiza inventario")
+    print("   - register_product_sale: Registra venta")
 
     @server.tool()
     async def update_user_by_phone(
