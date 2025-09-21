@@ -1,0 +1,38 @@
+# Node.js
+node_modules/
+npm-debug.log
+package-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+venv_whatsapp/
+ENV/
+# .env
+
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+
+# WhatsApp Session
+auth_info_baileys/
+*.json.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sistema Operativo
+.DS_Store
+Thumbs.db 
+auth_info_baileys_session1
+auth_info_baileys_session2
+
+auth_info_baileys_colombia_session1_colombia
+auth_info_baileys_colombia_session2_colombia
