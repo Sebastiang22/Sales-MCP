@@ -70,18 +70,36 @@ class DatabaseService:
         según el entorno de ejecución.
         """
         try:
-            # Engine configuration based on environment
-            engine_kwargs = {
-                "echo": settings.DEBUG,
-                "pool_pre_ping": True,
-                "poolclass": QueuePool,
-                "pool_size": settings.POSTGRES_POOL_SIZE,
-                "max_overflow": settings.POSTGRES_MAX_OVERFLOW,
-                "pool_recycle": 3600,  # Recycle connections every hour
-            }
+            # Determinar URL de base de datos: fallback a SQLite si no hay POSTGRES_URL
+            db_url = (settings.POSTGRES_URL or "").strip()
 
-            # Create the engine
-            self.engine = create_engine(settings.POSTGRES_URL, **engine_kwargs)
+            # Configuración del engine según el backend
+            if not db_url:
+                # Fallback para desarrollo: SQLite en archivo local
+                # Nota: check_same_thread=False permite acceso desde diferentes hilos
+                db_url = "sqlite:////home/agents/Agent-Sales/Sales-MCP/mcp/dev.db"
+                engine_kwargs = {
+                    "echo": settings.DEBUG,
+                    "connect_args": {"check_same_thread": False},
+                }
+            elif db_url.startswith("sqlite:"):
+                engine_kwargs = {
+                    "echo": settings.DEBUG,
+                    "connect_args": {"check_same_thread": False},
+                }
+            else:
+                # Configuración para Postgres u otros backends con pool
+                engine_kwargs = {
+                    "echo": settings.DEBUG,
+                    "pool_pre_ping": True,
+                    "poolclass": QueuePool,
+                    "pool_size": settings.POSTGRES_POOL_SIZE,
+                    "max_overflow": settings.POSTGRES_MAX_OVERFLOW,
+                    "pool_recycle": 3600,
+                }
+
+            # Crear el engine con la URL determinada
+            self.engine = create_engine(db_url, **engine_kwargs)
             
             logger.info(
                 "database_engine_initialized pool_size=%s max_overflow=%s",

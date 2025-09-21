@@ -3,6 +3,10 @@ InsureGent MCP
 Este servidor proporciona diferentes herramientas de busqueda de información en la base de conocimientos de Sura.
 """
 
+# journalctl -u sales-mcp -f -n 200
+# sudo systemctl restart sales-mcp
+
+
 import sys
 from pathlib import Path
 
@@ -61,7 +65,7 @@ server = FastMCP(
         
         """,
     host="0.0.0.0",
-    port=8050,
+    port=8052,
     stateless_http=True,
     # Autenticación comentada temporalmente
     # token_verifier=JWTVerifier(secret=settings.jwt.secret_key),

@@ -123,9 +123,11 @@ class AzureAISearchService:
             parts.append(f"price ge {filters['min_price']}")
         if "max_price" in filters:
             parts.append(f"price le {filters['max_price']}")
+        
         if "category" in filters:
             # Si existiera un campo 'category' en el índice
-            parts.append(f"category eq '{str(filters['category']).replace("'", "''")}'")
+            val_cat = str(filters["category"]).replace("'", "''")
+            parts.append(f"category eq '{val_cat}'")
         if "in_stock" in filters:
             # Si existiera 'stock_quantity' en el índice
             if filters["in_stock"]:
