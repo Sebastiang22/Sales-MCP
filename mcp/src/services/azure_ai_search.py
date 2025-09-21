@@ -9,7 +9,12 @@ Las funciones retornan estructuras controladas o errores descriptivos.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List, Tuple
+
+import json
+import httpx
+
+from core.config import settings
 
 
 @dataclass
@@ -41,6 +46,93 @@ class AzureAISearchService:
         """
         self.openai_client = openai_client
         self.config = config or AzureSearchConfig()
+
+    # --------------- Utilidades internas ---------------
+    async def _get_embeddings(self, text: str) -> Tuple[Optional[List[float]], Optional[str]]:
+        """Obtiene embeddings usando Azure OpenAI u OpenAI estándar.
+
+        Returns:
+            tuple: (vector, error). Si hay error, vector será None.
+        """
+        try:
+            # Preferir Azure OpenAI si está configurado
+            if (
+                settings.AZURE_OPENAI_API_KEY
+                and settings.AZURE_OPENAI_ENDPOINT
+                and settings.AZURE_OPENAI_API_VERSION
+                and settings.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT
+            ):
+                url = (
+                    f"{settings.AZURE_OPENAI_ENDPOINT.rstrip('/')}/openai/deployments/"
+                    f"{settings.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT}/embeddings?api-version="
+                    f"{settings.AZURE_OPENAI_API_VERSION}"
+                )
+                headers = {
+                    "api-key": settings.AZURE_OPENAI_API_KEY,
+                    "Content-Type": "application/json",
+                }
+                payload = {"input": text}
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
+                if resp.status_code >= 400:
+                    return None, f"Azure OpenAI error {resp.status_code}: {resp.text}"
+                data = resp.json()
+                vector = data.get("data", [{}])[0].get("embedding")
+                if not isinstance(vector, list):
+                    return None, "Respuesta de embeddings inválida (Azure OpenAI)"
+                return vector, None
+
+            # Fallback a OpenAI estándar
+            api_key = settings.OPENAI_API_KEY or settings.LLM_API_KEY
+            if api_key:
+                url = f"{settings.OPENAI_BASE_URL.rstrip('/')}/embeddings"
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": settings.OPENAI_EMBEDDINGS_MODEL,
+                    "input": text,
+                }
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
+                if resp.status_code >= 400:
+                    return None, f"OpenAI error {resp.status_code}: {resp.text}"
+                data = resp.json()
+                vector = data.get("data", [{}])[0].get("embedding")
+                if not isinstance(vector, list):
+                    return None, "Respuesta de embeddings inválida (OpenAI)"
+                return vector, None
+
+            return None, "No hay configuración de embeddings (Azure/OpenAI)"
+        except Exception as e:
+            return None, str(e)
+
+    def _build_odata_filter(self, filters: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Construye filtro OData para Azure Search a partir de filtros simples.
+
+        Soporta actualmente: store_id (exacto), min_price, max_price, category, in_stock.
+        """
+        if not filters:
+            return None
+        parts: List[str] = []
+        if "store_id" in filters and str(filters["store_id"]).strip():
+            val = str(filters["store_id"]).replace("'", "''")
+            parts.append(f"store_id eq '{val}'")
+        if "min_price" in filters:
+            parts.append(f"price ge {filters['min_price']}")
+        if "max_price" in filters:
+            parts.append(f"price le {filters['max_price']}")
+        if "category" in filters:
+            # Si existiera un campo 'category' en el índice
+            parts.append(f"category eq '{str(filters['category']).replace("'", "''")}'")
+        if "in_stock" in filters:
+            # Si existiera 'stock_quantity' en el índice
+            if filters["in_stock"]:
+                parts.append("stock_quantity gt 0")
+            else:
+                parts.append("stock_quantity eq 0")
+        return " and ".join(parts) if parts else None
 
     async def search_by_content_vector(self, query: str, top: int = 5, use_hybrid: bool = True, model_name: Optional[str] = None) -> Dict[str, Any]:
         """Realiza una búsqueda por vector de contenido (stub).
@@ -100,35 +192,156 @@ class AzureAISearchService:
         }
 
     async def search_products_by_text(self, query: str, top: int = 5, use_hybrid: bool = True, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Realiza una búsqueda de productos por texto/embeddings (stub).
+        """Realiza una búsqueda de productos por texto/embeddings contra Azure Search.
 
-        Esta búsqueda asume un índice de productos con un campo vectorial
-        (por ejemplo, `product_vector`) generado a partir de `name + description`.
-
-        Args:
-            query: Texto de búsqueda del producto.
-            top: Número máximo de resultados.
-            use_hybrid: Si combina búsqueda lexical con vectorial.
-            filters: Filtros opcionales (precio, stock, categoría, etc.).
-
-        Returns:
-            dict: Estructura con `error`, `total_count`, `documents`, `search_type`.
+        Si hay configuración de embeddings, usa vector search; con `use_hybrid=True`
+        añade búsqueda lexical simultánea. Si no hay configuración de Azure Search,
+        retorna resultados vacíos con error descriptivo.
         """
-        if not self.openai_client:
+        # Validar Azure Search
+        if not settings.AZURE_SEARCH_ENDPOINT or not settings.AZURE_SEARCH_API_KEY or not (self.config and self.config.index_name):
             return {
-                "error": "OpenAI client not configured",
+                "error": "Azure Search no configurado (endpoint/api_key/index)",
                 "total_count": 0,
                 "documents": [],
                 "search_type": "product_vector_stub",
             }
 
-        # Implementación real pendiente.
-        return {
-            "error": None,
-            "total_count": 0,
-            "documents": [],
-            "search_type": "product_vector",
+        # Intentar embeddings (si hay proveedor configurado)
+        embeddings: Optional[List[float]] = None
+        embeddings_error: Optional[str] = None
+        if self.openai_client:
+            embeddings, embeddings_error = await self._get_embeddings(query)
+
+        # Construir request de búsqueda
+        api_version = "2023-11-01"
+        # Construir endpoint a partir de SERVICE_NAME si no hay ENDPOINT completo
+        if settings.AZURE_SEARCH_ENDPOINT:
+            base = settings.AZURE_SEARCH_ENDPOINT.rstrip("/")
+        elif settings.AZURE_SEARCH_SERVICE_NAME:
+            base = f"https://{settings.AZURE_SEARCH_SERVICE_NAME}.search.windows.net"
+        else:
+            base = ""
+
+        if not base:
+            return {
+                "error": "Azure Search no configurado (endpoint/service_name)",
+                "total_count": 0,
+                "documents": [],
+                "search_type": "product_vector_stub",
+            }
+
+        url = (
+            f"{base}/indexes/{self.config.index_name}/docs/search?api-version={api_version}"
+        )
+        headers = {
+            "api-key": settings.AZURE_SEARCH_API_KEY,
+            "Content-Type": "application/json",
         }
+
+        payload: Dict[str, Any] = {
+            "count": True,
+            "top": top,
+        }
+
+        odata_filter = self._build_odata_filter(filters)
+        if odata_filter:
+            payload["filter"] = odata_filter
+
+        # Vector query si hay embeddings (usar 'vectors' en api-version 2023-11-01)
+        vector_field = settings.AZURE_SEARCH_VECTOR_FIELD
+        search_type = "lexical"
+        if embeddings and isinstance(embeddings, list):
+            payload["vectors"] = [
+                {
+                    "value": embeddings,
+                    "fields": vector_field,
+                    "k": top,
+                }
+            ]
+            search_type = "product_vector"
+
+        # Híbrido: agregar término lexical además de vector
+        if use_hybrid:
+            payload["queryType"] = "simple"
+            payload["search"] = query
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+            if resp.status_code >= 400:
+                # Fallback: algunos servicios usan 'vectorQueries' (API 2024-07-01)
+                body_text = resp.text.lower()
+                if embeddings and ("vectors" in body_text and "not a valid parameter" in body_text):
+                    try:
+                        api_version_fallback = "2024-07-01"
+                        url_fb = f"{base}/indexes/{self.config.index_name}/docs/search?api-version={api_version_fallback}"
+                        payload_fb: Dict[str, Any] = {
+                            "count": True,
+                            "top": top,
+                        }
+                        if odata_filter:
+                            payload_fb["filter"] = odata_filter
+                        if use_hybrid:
+                            payload_fb["queryType"] = "simple"
+                            payload_fb["search"] = query
+                        payload_fb["vectorQueries"] = [
+                            {
+                                "kind": "vector",
+                                "vector": embeddings,
+                                "fields": vector_field,
+                                "k": top,
+                            }
+                        ]
+                        async with httpx.AsyncClient(timeout=30.0) as client:
+                            resp_fb = await client.post(url_fb, headers=headers, json=payload_fb)
+                        if resp_fb.status_code >= 400:
+                            return {
+                                "error": f"Azure Search error {resp_fb.status_code}: {resp_fb.text}",
+                                "total_count": 0,
+                                "documents": [],
+                                "search_type": search_type,
+                            }
+                        data = resp_fb.json()
+                        docs = data.get("value", [])
+                        total = data.get("@odata.count", len(docs))
+                        return {
+                            "error": None,
+                            "total_count": total or len(docs),
+                            "documents": docs,
+                            "search_type": search_type,
+                        }
+                    except Exception as e_fb:
+                        return {
+                            "error": str(e_fb),
+                            "total_count": 0,
+                            "documents": [],
+                            "search_type": search_type,
+                        }
+                return {
+                    "error": f"Azure Search error {resp.status_code}: {resp.text}",
+                    "total_count": 0,
+                    "documents": [],
+                    "search_type": search_type,
+                }
+
+            data = resp.json()
+            docs = data.get("value", [])
+            total = data.get("@odata.count", len(docs))
+            return {
+                "error": None,
+                "total_count": total or len(docs),
+                "documents": docs,
+                "search_type": search_type,
+            }
+        except Exception as e:
+            return {
+                "error": str(e),
+                "total_count": 0,
+                "documents": [],
+                "search_type": search_type,
+                "embeddings_error": embeddings_error,
+            }
 
     async def search_product_by_sku(self, sku: str) -> Dict[str, Any]:
         """Busca un producto por SKU exacto (stub).
@@ -155,11 +368,42 @@ def get_azure_search_service() -> AzureAISearchService:
     """Crea y retorna una instancia del servicio de búsqueda.
 
     Esta función es el punto de entrada que utilizan las tools. Devuelve una
-    instancia con `openai_client=None` para indicar que no hay embeddings
-    configurados, permitiendo que las tools muestren mensajes guía.
+    instancia con un cliente de embeddings mínimo si hay claves presentes en
+    variables de entorno. Si no, retorna `openai_client=None` para modo stub.
     """
-    # En el futuro, inicializar aquí clientes reales (OpenAI/Azure) a partir de envs.
-    return AzureAISearchService(openai_client=None, config=AzureSearchConfig())
+    # Construir configuración básica del índice desde envs si existen
+    index_name = settings.AZURE_SEARCH_INDEX_NAME or "stub-index"
+    search_service_name = (
+        settings.AZURE_SEARCH_ENDPOINT or "stub-search-service"
+    )
+    config = AzureSearchConfig(
+        search_service_name=search_service_name,
+        index_name=index_name,
+    )
+
+    # Inicialización mínima del cliente de embeddings según envs disponibles
+    openai_client: Optional[Dict[str, Any]] = None
+
+    # Preferir Azure OpenAI si está configurado
+    if settings.AZURE_OPENAI_API_KEY and settings.AZURE_OPENAI_ENDPOINT:
+        openai_client = {
+            "provider": "azure-openai",
+            "endpoint": settings.AZURE_OPENAI_ENDPOINT,
+            "api_key_present": True,
+            "api_version": settings.AZURE_OPENAI_API_VERSION,
+            "embeddings_deployment": settings.AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT,
+        }
+    # Fallback a OpenAI estándar (o LLM_API_KEY) si está presente
+    elif settings.OPENAI_API_KEY or settings.LLM_API_KEY:
+        api_key_present = bool(settings.OPENAI_API_KEY or settings.LLM_API_KEY)
+        openai_client = {
+            "provider": "openai",
+            "base_url": settings.OPENAI_BASE_URL,
+            "api_key_present": api_key_present,
+            "embeddings_model": settings.OPENAI_EMBEDDINGS_MODEL,
+        }
+
+    return AzureAISearchService(openai_client=openai_client, config=config)
 
 
 __all__ = [

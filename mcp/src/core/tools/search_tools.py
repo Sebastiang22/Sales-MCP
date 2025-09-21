@@ -134,25 +134,17 @@ def register_search_tools(server: FastMCP) -> None:
     @server.tool()
     async def search_product_by_text(
         query: str,
-        top: int = 5,
-        min_price: Optional[float] = None,
-        max_price: Optional[float] = None,
-        in_stock: Optional[bool] = None,
-        category: Optional[str] = None,
+        store_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Busca productos por texto utilizando búsqueda híbrida y/o vectorial.
 
         Combina nombre y descripción del producto para calcular similitud semántica
-        en un índice de productos. Aplica filtros opcionales de precio, stock y categoría.
+        en un índice de productos. Permite filtrar por `store_id`.
 
         Args:
             query (str): Texto de búsqueda del producto
-            top (int, optional): Número máximo de resultados. Por defecto 5
-            min_price (float, optional): Precio mínimo de filtro
-            max_price (float, optional): Precio máximo de filtro
-            in_stock (bool, optional): Filtra productos con stock disponible
-            category (str, optional): Filtra por categoría
+            store_id (str, optional): Identificador de tienda para filtrar resultados
 
         Returns:
             dict: Resultados de búsqueda con estructura:
@@ -165,25 +157,20 @@ def register_search_tools(server: FastMCP) -> None:
                 }
         """
         try:
-            print(f"🛒 Búsqueda de productos por texto: '{query}' | top={top}")
+            DEFAULT_TOP = 12
+            print(f"🛒 Búsqueda de productos por texto: '{query}' | store_id={store_id}")
             search_service = get_azure_search_service()
 
             filters: Dict[str, Any] = {}
-            if min_price is not None:
-                filters["min_price"] = min_price
-            if max_price is not None:
-                filters["max_price"] = max_price
-            if in_stock is not None:
-                filters["in_stock"] = in_stock
-            if category is not None:
-                filters["category"] = category
+            if store_id:
+                filters["store_id"] = store_id
 
             # Verificar si OpenAI está configurado para búsqueda vectorial
             if not search_service.openai_client:
                 print("⚠️ OpenAI no está configurado - la búsqueda vectorial de productos funcionará en modo stub")
                 result = await search_service.search_products_by_text(
                     query=query,
-                    top=top,
+                    top=DEFAULT_TOP,
                     use_hybrid=True,
                     filters=filters or None,
                 )
@@ -198,7 +185,7 @@ def register_search_tools(server: FastMCP) -> None:
 
             result = await search_service.search_products_by_text(
                 query=query,
-                top=top,
+                top=DEFAULT_TOP,
                 use_hybrid=True,
                 filters=filters or None,
             )
