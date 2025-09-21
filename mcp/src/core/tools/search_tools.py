@@ -150,7 +150,7 @@ def register_search_tools(server: FastMCP) -> None:
             dict: Resultados de búsqueda con estructura:
                 {
                     "count": int,
-                    "results": List[{"name", "sku", "price", "description"}],
+                    "results": List[{"name", "sku", "price", "description", "images"}],
                     "query": str,
                     "search_type": str,
                     "field_used": str
@@ -174,9 +174,20 @@ def register_search_tools(server: FastMCP) -> None:
                     use_hybrid=True,
                     filters=filters or None,
                 )
+                docs = result.get("documents", [])
+                simplified = [
+                    {
+                        "name": d.get("name"),
+                        "sku": d.get("sku"),
+                        "price": d.get("price"),
+                        "description": d.get("description"),
+                        "images": d.get("images"),
+                    }
+                    for d in docs
+                ]
                 return {
-                    "count": result.get("total_count", 0),
-                    "results": result.get("documents", []),
+                    "count": result.get("total_count", len(simplified)),
+                    "results": simplified,
                     "query": query,
                     "search_type": result.get("search_type", "product_vector_stub"),
                     "field_used": "product_vector",
@@ -207,6 +218,7 @@ def register_search_tools(server: FastMCP) -> None:
                     "sku": d.get("sku"),
                     "price": d.get("price"),
                     "description": d.get("description"),
+                    "images": d.get("images"),
                 }
                 for d in docs
             ]
