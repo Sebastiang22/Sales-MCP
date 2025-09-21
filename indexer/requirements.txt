@@ -1,0 +1,6 @@
+# Dependencias mínimas para el indexador (sin versiones)
+python-dotenv
+openpyxl
+azure-search-documents
+azure-core
+openai

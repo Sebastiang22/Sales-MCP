@@ -1,0 +1,53 @@
+# Python bytecode y cachés
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales
+.venv/
+venv/
+ENV/
+env/
+
+# Variables de entorno
+.env
+.env.*
+
+# Logs
+logs/
+*.log
+*.jsonl
+
+# Cobertura y pruebas
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+.cache/
+
+# Artefactos de empaquetado
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Herramientas y análisis
+.mypy_cache/
+.pytype/
+.pyre/
+.ruff_cache/
+
+# IDE/Editor
+.vscode/
+.idea/
+*.iml
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Bases de datos locales
+*.db
+*.sqlite3
+
