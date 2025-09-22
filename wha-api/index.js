@@ -1266,8 +1266,9 @@ app.post('/api/send-video-url', async (req, res) => {
 });
 
 /**
- * Envía un audio desde una URL pública al número proporcionado
- * @param {Object} req - Objeto de solicitud HTTP con phone, audioUrl y caption
+ * Envía un audio desde una URL pública como nota de voz (ptt) por defecto.
+ * Permite enviar como audio normal si se especifica asVoiceNote=false.
+ * @param {Object} req - Objeto de solicitud HTTP con phone, audioUrl, caption y opcional asVoiceNote/forceVoiceNote
  * @param {Object} res - Objeto de respuesta HTTP
  */
 app.post('/api/send-audio-url', async (req, res) => {
@@ -1278,8 +1279,11 @@ app.post('/api/send-audio-url', async (req, res) => {
          * @param {string} imageBase64 - Imagen codificada en base64.
          * @param {string} [caption] - Texto opcional que acompaña la imagen.
          */
-        const { phone, audioUrl, caption = '', session } = req.body;
-        const forceVoiceNote = Boolean(req.body.asVoiceNote || req.body.forceVoiceNote);
+        const { phone, audioUrl, caption = '', session, asVoiceNote, forceVoiceNote } = req.body;
+        // Determina si se envía como nota de voz (por defecto true)
+        const sendAsVoiceNote = (typeof asVoiceNote === 'boolean')
+            ? asVoiceNote
+            : (typeof forceVoiceNote === 'boolean' ? forceVoiceNote : true);
         
         if (!phone || !audioUrl) {
             return res.status(400).json({ 
@@ -1364,7 +1368,7 @@ app.post('/api/send-audio-url', async (req, res) => {
              * En caso de MP3 y forceVoiceNote, se transcodifica a OGG Opus.
              */
             let audioMessage;
-            if (forceVoiceNote) {
+            if (sendAsVoiceNote) {
                 let oggBuffer = null;
                 if (isOpusVoice && finalAudioUrl.startsWith('http')) {
                     audioMessage = {
@@ -1412,8 +1416,17 @@ app.post('/api/send-audio-url', async (req, res) => {
                 audioMessage.caption = caption.trim();
             }
 
-            // Log del mensaje que se va a enviar
-            console.log(`📤 Enviando mensaje de audio:`, JSON.stringify(audioMessage, null, 2));
+            // Log del mensaje que se va a enviar (resumen, evitando imprimir Buffer)
+            const safeAudioLog = {
+                mimetype: audioMessage.mimetype,
+                ptt: audioMessage.ptt,
+                fileName: audioMessage.fileName,
+                caption: audioMessage.caption,
+                audio: Buffer.isBuffer(audioMessage.audio)
+                    ? `[buffer ${audioMessage.audio.length} bytes]`
+                    : (audioMessage.audio && audioMessage.audio.url ? `{url: ${audioMessage.audio.url}}` : typeof audioMessage.audio)
+            };
+            console.log('📤 Enviando mensaje de audio (resumen):', JSON.stringify(safeAudioLog, null, 2));
 
             const result = await Promise.race([
                 activeSocket.sendMessage(formattedNumber, audioMessage),
