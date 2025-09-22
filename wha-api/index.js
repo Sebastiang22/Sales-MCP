@@ -1,5 +1,5 @@
-//llamadas
-
+// sudo journalctl -u wha-api -f
+// sudo systemctl restart87 wha-api
 require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
 const { 
     default: makeWASocket, 
@@ -20,6 +20,8 @@ const { Server } = require('socket.io');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 const nodemailer = require('nodemailer');
+const os = require('os');
+const { execFile } = require('child_process');
 
 // Configuración de Express y middleware
 const app = express();
@@ -1270,8 +1272,15 @@ app.post('/api/send-video-url', async (req, res) => {
  */
 app.post('/api/send-audio-url', async (req, res) => {
     try {
+        /**
+         * Recibe un número de teléfono, una imagen en base64 y un caption opcional para enviar una imagen por WhatsApp.
+         * @param {string} phone - Número de teléfono del destinatario.
+         * @param {string} imageBase64 - Imagen codificada en base64.
+         * @param {string} [caption] - Texto opcional que acompaña la imagen.
+         */
         const { phone, audioUrl, caption = '', session } = req.body;
-
+        const forceVoiceNote = Boolean(req.body.asVoiceNote || req.body.forceVoiceNote);
+        
         if (!phone || !audioUrl) {
             return res.status(400).json({ 
                 status: false, 
@@ -1303,6 +1312,9 @@ app.post('/api/send-audio-url', async (req, res) => {
             
             // Verificar si la URL es válida antes de enviarla
             let finalAudioUrl = audioUrl; // Variable para almacenar la URL final
+            // Mimetype detectado por verificación remota (si aplica)
+            let resolvedContentType = null;
+            let isOpusVoice = false; // true si es OGG Opus (nota de voz)
             
             if (audioUrl.startsWith('http')) {
                 try {
@@ -1330,10 +1342,13 @@ app.post('/api/send-audio-url', async (req, res) => {
                     
                     // Verificar si la respuesta contiene un tipo de contenido de audio
                     const contentType = response.headers['content-type'];
+                    resolvedContentType = contentType || null;
                     if (!contentType || !contentType.startsWith('audio/')) {
                         throw new Error(`El recurso no es un audio válido: ${contentType}`);
                     }
-                    console.log(`📊 Audio válido: ${contentType}`);
+                    // Determinar si es OGG Opus (nota de voz)
+                    isOpusVoice = /audio\/ogg/.test(contentType) || /opus/i.test(contentType);
+                    console.log(`📊 Audio válido: ${contentType} (voiceNote=${isOpusVoice})`);
                 } catch (urlError) {
                     console.error('Error al verificar la URL del audio:', urlError.message);
                     throw new Error(`URL de audio inválida o inaccesible: ${urlError.message}`);
@@ -1343,20 +1358,57 @@ app.post('/api/send-audio-url', async (req, res) => {
                 throw new Error(`El archivo de audio no existe en la ruta: ${audioUrl}`);
             }
 
-            // Enviar el audio como nota de voz usando el formato correcto de Baileys
-            const audioMessage = {
-                audio: { url: finalAudioUrl },
-                mimetype: 'audio/mpeg', // Formato correcto según documentación de Baileys
-                ptt: true, // ptt: true para nota de voz, false para audio normal
-                fileName: `voice_message_${Date.now()}.mp3`, // Nombre del archivo para mejor identificación
-                seconds: undefined, // Duración del audio (se detecta automáticamente)
-                contextInfo: {
-                    forwardingScore: 0,
-                    isForwarded: false
+            // Construcción del mensaje según el tipo detectado o forzado
+            /**
+             * Si se fuerza nota de voz o el archivo ya es OGG Opus, enviar con ptt: true.
+             * En caso de MP3 y forceVoiceNote, se transcodifica a OGG Opus.
+             */
+            let audioMessage;
+            if (forceVoiceNote) {
+                let oggBuffer = null;
+                if (isOpusVoice && finalAudioUrl.startsWith('http')) {
+                    audioMessage = {
+                        audio: { url: finalAudioUrl },
+                        mimetype: 'audio/ogg; codecs=opus',
+                        ptt: true,
+                        fileName: `voice_message_${Date.now()}.ogg`
+                    };
+                } else {
+                    // Descargar y convertir a OGG Opus
+                    let sourceBuffer = null;
+                    if (finalAudioUrl.startsWith('http')) {
+                        const getResp = await axios.get(finalAudioUrl, { responseType: 'arraybuffer', timeout: 30000 });
+                        sourceBuffer = Buffer.from(getResp.data);
+                    } else {
+                        sourceBuffer = await fs.promises.readFile(finalAudioUrl);
+                    }
+                    oggBuffer = await transcodeBufferToOggOpus(sourceBuffer);
+                    audioMessage = {
+                        audio: oggBuffer,
+                        mimetype: 'audio/ogg; codecs=opus',
+                        ptt: true,
+                        fileName: `voice_message_${Date.now()}.ogg`
+                    };
                 }
-            };
+            } else {
+                const isVoiceNote = Boolean(isOpusVoice);
+                audioMessage = isVoiceNote
+                    ? {
+                        audio: { url: finalAudioUrl },
+                        mimetype: 'audio/ogg; codecs=opus',
+                        ptt: true,
+                        fileName: `voice_message_${Date.now()}.ogg`
+                    }
+                    : {
+                        audio: { url: finalAudioUrl },
+                        mimetype: resolvedContentType || 'audio/mpeg',
+                        ptt: false,
+                        fileName: `audio_${Date.now()}.mp3`
+                    };
+            }
             
-            if (caption && caption.trim()) {
+            // Agregar caption solo cuando NO es nota de voz
+            if (!audioMessage.ptt && caption && caption.trim()) {
                 audioMessage.caption = caption.trim();
             }
 
@@ -1379,7 +1431,6 @@ app.post('/api/send-audio-url', async (req, res) => {
                     originalUrl: audioUrl
                 }
             });
-
         } catch (downloadError) {
             console.error('Error al descargar audio:', downloadError);
             return res.status(400).json({
@@ -1718,6 +1769,7 @@ app.post('/api/send-voice-message', async (req, res) => {
             }
             
             // Verificar si la URL es válida antes de enviarla
+            let isOggOpus = false;
             if (audioUrl.startsWith('http')) {
                 try {
                     // Verificar si el audio existe y es accesible
@@ -1733,7 +1785,8 @@ app.post('/api/send-voice-message', async (req, res) => {
                     if (!contentType || !contentType.startsWith('audio/')) {
                         throw new Error(`El recurso no es un audio válido: ${contentType}`);
                     }
-                    console.log(`📊 Audio válido para mensaje de voz: ${contentType}`);
+                    isOggOpus = /audio\/ogg/.test(contentType) || /opus/i.test(contentType);
+                    console.log(`📊 Audio válido para mensaje de voz: ${contentType} (voiceNote=${isOggOpus})`);
                 } catch (urlError) {
                     console.error('Error al verificar la URL del audio:', urlError.message);
                     throw new Error(`URL de audio inválida o inaccesible: ${urlError.message}`);
@@ -1743,15 +1796,37 @@ app.post('/api/send-voice-message', async (req, res) => {
                 throw new Error(`El archivo de audio no existe en la ruta: ${audioUrl}`);
             }
 
-            // Enviar el mensaje de voz con ptt: true
-            const result = await Promise.race([
-                activeSocket.sendMessage(formattedNumber, {
-                    audio: { url: audioUrl },
-                    mimetype: 'audio/ogg; codecs=opus',
-                    ptt: true // ptt: true para mensaje de voz
-                }),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout al enviar mensaje de voz')), 25000))
-            ]);
+            // Enviar el mensaje de voz con ptt: true; convertir si no es OGG Opus
+            let result;
+            if (isOggOpus && audioUrl.startsWith('http')) {
+                // Ya es OGG Opus accesible por URL
+                result = await Promise.race([
+                    activeSocket.sendMessage(formattedNumber, {
+                        audio: { url: audioUrl },
+                        mimetype: 'audio/ogg; codecs=opus',
+                        ptt: true
+                    }),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout al enviar mensaje de voz')), 25000))
+                ]);
+            } else {
+                // Descargar y convertir a OGG Opus
+                let sourceBuffer = null;
+                if (audioUrl.startsWith('http')) {
+                    const getResp = await axios.get(audioUrl, { responseType: 'arraybuffer', timeout: 30000 });
+                    sourceBuffer = Buffer.from(getResp.data);
+                } else {
+                    sourceBuffer = await fs.promises.readFile(audioUrl);
+                }
+                const oggBuffer = await transcodeBufferToOggOpus(sourceBuffer);
+                result = await Promise.race([
+                    activeSocket.sendMessage(formattedNumber, {
+                        audio: oggBuffer,
+                        mimetype: 'audio/ogg; codecs=opus',
+                        ptt: true
+                    }),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout al enviar mensaje de voz')), 25000))
+                ]);
+            }
 
             console.log('✅ Mensaje de voz enviado correctamente');
 
@@ -1912,3 +1987,56 @@ server.listen(PORT, async () => {
     console.log('🔄 Iniciando conexión de WhatsApp (una sola sesión)...');
     await connectToWhatsApp('session1', globalSocket1, isConnecting1, reconnectAttempts1);
 });
+
+// Resolver binario de ffmpeg (usar ffmpeg-static si está instalado)
+let FFMPEG_BIN = 'ffmpeg';
+try {
+    // eslint-disable-next-line global-require
+    FFMPEG_BIN = require('ffmpeg-static') || 'ffmpeg';
+} catch (e) {
+    console.warn('⚠️ ffmpeg-static no instalado; se intentará usar ffmpeg del sistema');
+}
+
+/**
+ * Transcodifica un buffer de audio a OGG Opus usando ffmpeg
+ * Retorna un Buffer con el audio en `audio/ogg; codecs=opus`.
+ * @param {Buffer} inputBuffer - Buffer de entrada (mp3/wav/etc.)
+ * @returns {Promise<Buffer>}
+ */
+async function transcodeBufferToOggOpus(inputBuffer) {
+    const tmpDir = os.tmpdir();
+    const unique = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const inPath = path.join(tmpDir, `in_${unique}.tmp`);
+    const outPath = path.join(tmpDir, `out_${unique}.ogg`);
+    await fs.promises.writeFile(inPath, inputBuffer);
+    return new Promise((resolve, reject) => {
+        const args = [
+            '-y',
+            '-i', inPath,
+            '-vn',
+            '-ac', '1',
+            '-ar', '48000',
+            '-c:a', 'libopus',
+            '-b:a', '64k',
+            outPath
+        ];
+        execFile(FFMPEG_BIN, args, async (err) => {
+            const cleanup = async () => {
+                try { await fs.promises.unlink(inPath); } catch {}
+                try { await fs.promises.unlink(outPath); } catch {}
+            };
+            if (err) {
+                await cleanup();
+                return reject(err);
+            }
+            try {
+                const output = await fs.promises.readFile(outPath);
+                await cleanup();
+                return resolve(output);
+            } catch (readErr) {
+                await cleanup();
+                return reject(readErr);
+            }
+        });
+    });
+}
