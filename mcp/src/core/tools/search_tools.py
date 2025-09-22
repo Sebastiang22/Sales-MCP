@@ -301,8 +301,121 @@ def register_search_tools(server: FastMCP) -> None:
                 "error": str(e),
             }
 
+    @server.tool()
+    async def list_products_by_store(
+        store_id: str,
+        top: int = 100,
+    ) -> Dict[str, Any]:
+        """
+        Lista productos de una tienda específica usando `store_id`.
+
+        Esta herramienta consulta el índice de productos aplicando un filtro exacto
+        por `store_id` y devuelve una lista simplificada de productos. Utiliza
+        búsqueda híbrida (lexical + vectorial) cuando hay embeddings disponibles.
+
+        Args:
+            store_id (str): Identificador de la tienda para filtrar los productos
+            top (int, optional): Máximo de productos a retornar. Por defecto 100
+
+        Returns:
+            dict: Resultados de búsqueda con estructura:
+                {
+                    "count": int,
+                    "results": List[{"name", "sku", "price", "description", "images"}],
+                    "store_id": str,
+                    "search_type": str,
+                    "field_used": str
+                }
+        """
+        try:
+            print(f"🏬 Listado de productos por store_id: '{store_id}' | top={top}")
+            search_service = get_azure_search_service()
+
+            filters: Dict[str, Any] = {"store_id": store_id}
+            query_all = "*"
+
+            # Modo sin embeddings: opera solo en lexical/híbrido
+            if not search_service.openai_client:
+                print("⚠️ OpenAI no está configurado - listado operará en modo lexical/híbrido")
+                result = await search_service.search_products_by_text(
+                    query=query_all,
+                    top=top,
+                    use_hybrid=True,
+                    filters=filters,
+                )
+                docs = result.get("documents", [])
+                simplified = [
+                    {
+                        "name": d.get("name"),
+                        "sku": d.get("sku"),
+                        "price": d.get("price"),
+                        "description": d.get("description"),
+                        "images": d.get("images"),
+                    }
+                    for d in docs
+                ]
+                return {
+                    "count": result.get("total_count", len(simplified)),
+                    "results": simplified,
+                    "store_id": store_id,
+                    "search_type": result.get("search_type", "lexical"),
+                    "field_used": "store_id_filter",
+                    "warning": "OpenAI no configurado; resultados basados en búsqueda lexical/híbrida",
+                }
+
+            # Con embeddings disponibles: híbrido por defecto
+            result = await search_service.search_products_by_text(
+                query=query_all,
+                top=top,
+                use_hybrid=True,
+                filters=filters,
+            )
+
+            if result.get("error"):
+                return {
+                    "count": 0,
+                    "results": [],
+                    "store_id": store_id,
+                    "search_type": "error",
+                    "field_used": "store_id_filter",
+                    "error": result["error"],
+                }
+
+            docs = result.get("documents", [])
+            simplified = [
+                {
+                    "name": d.get("name"),
+                    "sku": d.get("sku"),
+                    "price": d.get("price"),
+                    "description": d.get("description"),
+                    "images": d.get("images"),
+                }
+                for d in docs
+            ]
+
+            print(f"✅ Encontrados {result.get('total_count', 0)} productos para store_id '{store_id}'")
+            return {
+                "count": result.get("total_count", len(simplified)),
+                "results": simplified,
+                "store_id": store_id,
+                "search_type": result.get("search_type", "product_vector"),
+                "field_used": "store_id_filter",
+            }
+
+        except Exception as e:
+            print(f"❌ Error en listado por store_id: {str(e)}")
+            return {
+                "count": 0,
+                "results": [],
+                "store_id": store_id,
+                "search_type": "error",
+                "field_used": "store_id_filter",
+                "error": str(e),
+            }
+
     print("🔧 Herramientas de búsqueda registradas en el servidor MCP")
     print("   - search_product_by_text: Búsqueda de productos por texto (product_vector)")
     print("   - search_product_by_sku: Búsqueda de producto por SKU exacto")
+    print("   - list_products_by_store: Lista productos por store_id")
     print("   - Las herramientas soportan modo híbrido (texto + vector) donde aplique")
 
