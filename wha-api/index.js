@@ -947,11 +947,18 @@ app.post('/api/send-images', async (req, res) => {
         // Formatear el número de teléfono
         const formattedNumber = phoneDigits + '@s.whatsapp.net';
         
-        // Enviar la imagen con el caption
-        const result = await activeSocket.sendMessage(formattedNumber, {
-            image: imageBuffer,
-            caption: caption
-        });
+        // Construir el mensaje de imagen condicionalmente con caption
+        const imageMessage = {
+            image: imageBuffer
+        };
+        
+        // Agregar caption solo si existe y no está vacío
+        if (caption && caption.trim()) {
+            imageMessage.caption = caption.trim();
+        }
+        
+        // Enviar la imagen
+        const result = await activeSocket.sendMessage(formattedNumber, imageMessage);
         
         res.status(200).json({
             status: true,
@@ -1107,11 +1114,19 @@ app.post('/api/send-image-url', async (req, res) => {
                 throw new Error(`El archivo de imagen no existe en la ruta: ${imageUrl}`);
             }
 
-            // Enviar la imagen con caption usando el formato que funciona: { url: processedImageUrl }
+            // Construir el mensaje de imagen condicionalmente con caption
+            const imageMessage = {
+                image: { url: processedImageUrl }
+            };
+            
+            // Agregar caption solo si existe y no está vacío
+            if (caption && caption.trim()) {
+                imageMessage.caption = caption.trim();
+            }
+            
+            // Enviar la imagen
             const result = await Promise.race([
-                activeSocket.sendMessage(formattedNumber, {
-                    image: { url: processedImageUrl }
-                }),
+                activeSocket.sendMessage(formattedNumber, imageMessage),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout al enviar imagen')), 25000))
             ]);
 
@@ -1912,12 +1927,19 @@ app.post('/api/send-image-url-force', async (req, res) => {
 
             console.log(`⚠️ Enviando imagen sin validación estricta: ${processedImageUrl}`);
 
+            // Construir el mensaje de imagen condicionalmente con caption
+            const imageMessage = {
+                image: { url: processedImageUrl }
+            };
+            
+            // Agregar caption solo si existe y no está vacío
+            if (caption && caption.trim()) {
+                imageMessage.caption = caption.trim();
+            }
+            
             // Enviar la imagen sin validación previa
             const result = await Promise.race([
-                activeSocket.sendMessage(formattedNumber, {
-                    image: { url: processedImageUrl },
-                    caption: caption
-                }),
+                activeSocket.sendMessage(formattedNumber, imageMessage),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout al enviar imagen')), 25000))
             ]);
 
@@ -1948,6 +1970,143 @@ app.post('/api/send-image-url-force', async (req, res) => {
         res.status(500).json({
             status: false,
             message: 'Error al procesar imagen sin validación',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Envía un archivo PDF desde una URL pública al número proporcionado
+ * @param {Object} req - Objeto de solicitud HTTP con phone, pdfUrl, fileName y caption opcional
+ * @param {Object} res - Objeto de respuesta HTTP
+ */
+app.post('/api/send-pdf-url', async (req, res) => {
+    try {
+        const { phone, pdfUrl, fileName = 'document.pdf', caption = '', session } = req.body;
+
+        if (!phone || !pdfUrl) {
+            return res.status(400).json({ 
+                status: false, 
+                message: 'El número de teléfono y la URL del PDF son obligatorios' 
+            });
+        }
+
+        // Seleccionar socket según preferencia o asociación por teléfono
+        const phoneDigits = String(phone || '').replace(/[^\d]/g, '');
+        const activeSocket = getSocketForDelivery(phoneDigits, session);
+
+        if (!activeSocket) {
+            return res.status(500).json({ 
+                status: false, 
+                message: 'WhatsApp no está conectado' 
+            });
+        }
+
+        // Formatear el número de teléfono
+        const formattedNumber = phoneDigits + '@s.whatsapp.net';
+        console.log(`📄 Enviando PDF desde URL a ${formattedNumber}`);
+
+        try {
+            // Validar que la URL del PDF no esté vacía
+            if (!pdfUrl || typeof pdfUrl !== 'string' || pdfUrl.trim() === '') {
+                throw new Error('La URL del PDF es inválida o está vacía');
+            }
+            
+            // Procesar la URL para manejar casos especiales (Google Drive, etc.)
+            let processedPdfUrl = processImageUrl(pdfUrl); // Reutilizar función existente
+            if (processedPdfUrl !== pdfUrl) {
+                console.log(`🔄 URL de PDF procesada: ${pdfUrl} -> ${processedPdfUrl}`);
+            }
+            
+            // Verificar si la URL es válida antes de enviarla
+            if (processedPdfUrl.startsWith('http')) {
+                try {
+                    console.log(`🔍 Verificando URL de PDF: ${processedPdfUrl}`);
+                    
+                    // Verificar que el recurso sea accesible
+                    const response = await Promise.race([
+                        axios.head(processedPdfUrl, {
+                            timeout: 15000,
+                            maxRedirects: 5
+                        }),
+                        new Promise((_, reject) => 
+                            setTimeout(() => reject(new Error('Timeout al verificar el PDF')), 15000)
+                        )
+                    ]);
+                    
+                    // Verificar si la respuesta contiene un tipo de contenido de PDF
+                    const contentType = response.headers['content-type'];
+                    console.log(`📊 Content-Type recibido: ${contentType}`);
+                    
+                    if (!contentType || !contentType.includes('application/pdf')) {
+                        console.warn(`⚠️ El recurso puede no ser un PDF válido: ${contentType}`);
+                    }
+                    
+                    console.log(`✅ PDF válido: ${contentType}`);
+                    
+                } catch (urlError) {
+                    console.error('❌ Error al verificar la URL del PDF:', urlError.message);
+                    
+                    // Log detallado del error
+                    if (urlError.response) {
+                        console.error('   Status:', urlError.response.status);
+                        console.error('   Status Text:', urlError.response.statusText);
+                        console.error('   Headers:', urlError.response.headers);
+                    }
+                    
+                    throw new Error(`URL de PDF inválida o inaccesible: ${urlError.message}`);
+                }
+            } else if (!fs.existsSync(pdfUrl)) {
+                // Si es una ruta local, verificar que el archivo exista
+                throw new Error(`El archivo PDF no existe en la ruta: ${pdfUrl}`);
+            }
+
+            // Construir el mensaje de documento condicionalmente con caption
+            const documentMessage = {
+                document: { url: processedPdfUrl },
+                mimetype: 'application/pdf',
+                fileName: fileName
+            };
+            
+            // Agregar caption solo si existe y no está vacío
+            if (caption && caption.trim()) {
+                documentMessage.caption = caption.trim();
+            }
+            
+            // Enviar el PDF
+            const result = await Promise.race([
+                activeSocket.sendMessage(formattedNumber, documentMessage),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout al enviar PDF')), 30000))
+            ]);
+
+            console.log('✅ Resultado del envío de PDF:', result);
+
+            res.status(200).json({
+                status: true,
+                message: 'PDF enviado correctamente desde URL',
+                data: {
+                    phone: formattedNumber,
+                    originalUrl: pdfUrl,
+                    processedUrl: processedPdfUrl,
+                    fileName: fileName,
+                    caption: caption || null
+                }
+            });
+
+        } catch (downloadError) {
+            console.error('Error al enviar PDF:', downloadError);
+            return res.status(400).json({
+                status: false,
+                message: 'Error al enviar el PDF desde la URL proporcionada',
+                error: downloadError.message
+            });
+        }
+
+    } catch (error) {
+        console.error('Error al enviar PDF desde URL:', error);
+        res.status(500).json({
+            status: false,
+            message: 'Error al enviar PDF desde URL',
             error: error.message
         });
     }
