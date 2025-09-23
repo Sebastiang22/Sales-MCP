@@ -4,12 +4,14 @@ Herramientas MCP para operaciones de base de datos relacionadas con ventas.
 Este módulo registra herramientas MCP para crear registros de ventas de productos.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
+import json
 
 from mcp.server.fastmcp import FastMCP
 from sqlmodel import select
 
 from database.connection import database_service
+from services import purchase_service, PurchaseServiceError
 from models.product import Product
 from models.sale import ProductSale
 from models.user import User
@@ -24,38 +26,53 @@ def register_db_tools(server: FastMCP) -> None:
 
     @server.tool()
     async def register_product_sale(
-        sku: Optional[str] = None,
-        product_id: Optional[int] = None,
-        quantity: int = 1,
-        unit_price: Optional[float] = None,
-        customer_address: str = "",
+        store_id: str,
+        customer_phone: str,
+        customer_address: str,
+        products: Any,
     ) -> Dict[str, Any]:
-        """Registra la venta de un producto.
+        """Registra una compra con múltiples productos en una sola operación.
 
-        Valida la existencia del producto y crea un registro de venta con el
-        precio unitario indicado o el del producto.
+        Se esperan parámetros explícitos: `store_id`, `customer_phone`, `customer_address` y `products`.
+        `products` puede ser una lista o JSON string con elementos `{ "product_id": int, "quantity": int }`.
 
         Args:
-            sku (Optional[str]): SKU del producto a vender. Alternativo a product_id.
-            product_id (Optional[int]): ID del producto a vender. Alternativo a sku.
-            quantity (int): Cantidad a vender. Debe ser > 0.
-            unit_price (Optional[float]): Precio unitario. Si no se provee, usa product.price.
-            customer_address (str): Dirección del cliente asociada a la venta.
+            store_id (str): Identificador de la tienda para mapear la tabla de compras.
+            customer_phone (str): Teléfono del cliente asociado a la compra.
+            customer_address (str): Dirección del cliente asociada a la compra.
+            products (Any): Lista de productos o JSON string con productos a comprar.
 
         Returns:
-            Dict[str, Any]: Resultado de la operación con detalles de la venta y stock.
+            Dict[str, Any]: Resultado con la compra persistida.
         """
         try:
-            if (sku is None and product_id is None) or (sku and product_id):
+            # Manejar tanto lista como JSON string
+            if isinstance(products, str):
+                try:
+                    products_list = json.loads(products)
+                except json.JSONDecodeError:
+                    return {
+                        "success": False,
+                        "error": "El campo 'products' debe ser un JSON válido",
+                    }
+            elif isinstance(products, list):
+                products_list = products
+            else:
                 return {
                     "success": False,
-                    "error": "Debe proporcionar únicamente sku o product_id",
+                    "error": "El campo 'products' debe ser una lista o JSON string",
+                }
+            
+            if not isinstance(products_list, list) or len(products_list) == 0:
+                return {
+                    "success": False,
+                    "error": "Debe proporcionar una lista 'products' con al menos un item",
                 }
 
-            if quantity <= 0:
+            if not customer_phone or len(customer_phone.strip()) < 10:
                 return {
                     "success": False,
-                    "error": "La cantidad debe ser mayor a 0",
+                    "error": "El teléfono del cliente es inválido (mínimo 10 caracteres)",
                 }
 
             if not customer_address or len(customer_address.strip()) < 5:
@@ -64,56 +81,37 @@ def register_db_tools(server: FastMCP) -> None:
                     "error": "La dirección del cliente es inválida (mínimo 5 caracteres)",
                 }
 
-            with database_service.get_session_context() as session:
-                product: Optional[Product] = None
+            # Validar estructura básica de los items sin consultar BD
+            requested_items: List[Dict[str, Any]] = []
+            for i, item in enumerate(products_list):
+                pid = int(item.get("product_id", 0)) if item and isinstance(item, dict) else 0
+                qty = int(item.get("quantity", 0)) if item and isinstance(item, dict) else 0
+                if pid <= 0 or qty <= 0:
+                    return {"success": False, "error": f"Cada item debe incluir product_id>0 y quantity>0. Item {i}: pid={pid}, qty={qty}"}
+                requested_items.append({"product_id": pid, "quantity": qty})
 
-                if sku is not None:
-                    normalized_sku = sku.strip().upper()
-                    stmt = select(Product).where(Product.sku == normalized_sku)
-                    product = session.exec(stmt).first()
-                else:
-                    product = session.get(Product, product_id)  # type: ignore[arg-type]
+            # Persistir directamente sin validaciones de BD
+            saved = purchase_service.save_purchase(
+                store_id=store_id,
+                purchase={
+                    "total_amount": 0.0,  # Total será calculado externamente si es necesario
+                    "customer_phone": customer_phone.strip(),
+                    "customer_address": customer_address.strip(),
+                    "products": requested_items,  # Guardar tal como viene
+                },
+            )
 
-                if product is None:
-                    return {
-                        "success": False,
-                        "error": "Producto no encontrado",
-                    }
+            return {
+                "success": True,
+                "sale": saved,
+            }
 
-                applied_unit_price = unit_price if unit_price is not None else product.price
-
-                if not product.is_active:
-                    return {
-                        "success": False,
-                        "error": "El producto no está activo para la venta",
-                    }
-
-                sale = ProductSale(
-                    product_id=product.id,  # type: ignore[arg-type]
-                    quantity=quantity,
-                    unit_price=applied_unit_price,
-                    total_amount=0.0,
-                    customer_address=customer_address.strip(),
-                )
-                sale.update_total()
-
-                session.add(sale)
-                session.commit()
-                session.refresh(sale)
-
-                return {
-                    "success": True,
-                    "sale": {
-                        "id": sale.id,
-                        "product_id": sale.product_id,
-                        "quantity": sale.quantity,
-                        "unit_price": sale.unit_price,
-                        "total_amount": sale.total_amount,
-                        "customer_address": sale.customer_address,
-                        "created_at": str(sale.created_at) if getattr(sale, "created_at", None) else None,
-                    },
-                }
-
+        except PurchaseServiceError as e:
+            return {
+                "success": False,
+                "error": e.message,
+                "status_code": e.status_code,
+            }
         except Exception as e:
             return {
                 "success": False,
@@ -122,6 +120,28 @@ def register_db_tools(server: FastMCP) -> None:
 
     print("🗄️ Herramientas de base de datos registradas en el servidor MCP")
     print("   - register_product_sale: Registra venta")
+
+    @server.tool()
+    async def get_store_purchases(store_id: str, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+        """Obtiene compras de una tienda específica usando su tabla mapeada.
+
+        Args:
+            store_id (str): Identificador de la tienda para resolver la tabla.
+            limit (int): Límite de registros a recuperar (1-200).
+            offset (int): Desplazamiento de los registros.
+
+        Returns:
+            Dict[str, Any]: Resultado con la lista de compras.
+        """
+        try:
+            purchases = purchase_service.get_purchases(store_id=store_id, limit=limit, offset=offset)
+            return {"success": True, "purchases": purchases}
+        except PurchaseServiceError as e:
+            return {"success": False, "error": e.message, "status_code": e.status_code}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    print("   - get_store_purchases: Lista compras por tienda")
 
     @server.tool()
     async def update_user_by_phone(

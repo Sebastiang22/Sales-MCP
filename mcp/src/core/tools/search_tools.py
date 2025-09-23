@@ -162,8 +162,8 @@ def register_search_tools(server: FastMCP) -> None:
             search_service = get_azure_search_service()
 
             filters: Dict[str, Any] = {}
-            if store_id:
-                filters["store_id"] = store_id
+            # if store_id:
+            filters["store_id"] = store_id
 
             # Verificar si OpenAI está configurado para búsqueda vectorial
             if not search_service.openai_client:
