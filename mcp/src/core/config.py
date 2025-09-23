@@ -68,7 +68,7 @@ def load_env_file():
     }
     env_file = env_files.get(env.value, base_dir / ".env.development")
     if env_file.exists():
-        load_dotenv(dotenv_path=env_file)
+        load_dotenv(dotenv_path=env_file, override=True)
 
 
 # Llamar a la función para cargar el archivo de entorno adecuado

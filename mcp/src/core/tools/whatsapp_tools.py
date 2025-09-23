@@ -16,7 +16,7 @@ from services import whatsapp_service, WhatsAppServiceError
 
 def register_whatsapp_tools(server: FastMCP) -> None:
     """Registra tools para enviar medios por WhatsApp."""
-    # TODO Registrar identificador de imagen y session_id para no repetir imágenes
+    # TODO Registrar identificador de imagen 
     @server.tool()
     async def send_whatsapp_image(phone: str, image_url: str, port: int = 3001, caption: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -56,9 +56,9 @@ def register_whatsapp_tools(server: FastMCP) -> None:
         except Exception as e:
             return {"status": "error", "message": str(e), "status_code": 500}
 
-    # TODO Registrar identificador de audio y session_id para no repetir audios, y que no se repitan
+    # TODO Registrar identificador de audio 
     @server.tool()
-    async def send_whatsapp_audio(phone: str, audio_url: str, port: int = 3001, session: str = "Demo") -> Dict[str, Any]:
+    async def send_whatsapp_audio(phone: str, audio_url: str, port: int = 3001) -> Dict[str, Any]:
         """
         Envía un audio por WhatsApp a partir de una URL pública. 
         Los audios enviados como notas de voz no incluyen caption.
@@ -67,7 +67,6 @@ def register_whatsapp_tools(server: FastMCP) -> None:
             phone (str): Número del destinatario en formato internacional sin símbolos
             audio_url (str): URL pública del audio (mp3/ogg)
             port (int): Puerto del servidor WhatsApp a usar (por defecto 3001)
-            session (str): Identificador de la sesión (por defecto "Demo")
 
         Returns:
             Dict[str, Any]: Respuesta del servidor con estado y datos
@@ -76,8 +75,7 @@ def register_whatsapp_tools(server: FastMCP) -> None:
             result = whatsapp_service.send_audio(
                 phone=phone,
                 audio_url=audio_url,
-                port=port,
-                session=session
+                port=port
             )
             return {"status": "success", "data": result}
         except WhatsAppServiceError as e:
@@ -85,7 +83,7 @@ def register_whatsapp_tools(server: FastMCP) -> None:
         except Exception as e:
             return {"status": "error", "message": str(e), "status_code": 500}
 
-    # TODO Registrar identificador de video y session_id para no repetir videos
+    # TODO Registrar identificador de video 
     @server.tool()
     async def send_whatsapp_video(phone: str, video_url: str, port: int = 3001, caption: Optional[str] = None) -> Dict[str, Any]:
         """

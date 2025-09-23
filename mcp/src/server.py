@@ -55,7 +55,7 @@ logger.setLevel(logging.INFO)
 
 # Initialize FastMCP server
 server = FastMCP(
-    name="MCP ColombianG",
+    name="MCP Sales",
     instructions= """
         Servidor MCP con herramientas para:
     
