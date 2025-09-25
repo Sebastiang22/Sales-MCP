@@ -27,20 +27,29 @@ def register_db_tools(server: FastMCP) -> None:
     @server.tool()
     async def register_product_sale(
         store_id: str,
-        customer_phone: str,
-        customer_address: str,
+        client_phone: str,
+        client_full_name: str,
+        client_document: str,
+        client_address: str,
+        client_city: str,
+        client_email: Optional[str],
         products: Any,
     ) -> Dict[str, Any]:
         """Registra una compra con múltiples productos en una sola operación.
 
-        Se esperan parámetros explícitos: `store_id`, `customer_phone`, `customer_address` y `products`.
-        `products` puede ser una lista o JSON string con elementos `{ "product_id": int, "quantity": int }`.
+        Se esperan parámetros explícitos: `store_id`, datos del cliente por separado y `products`.
+        `products` debe ser una lista con elementos/diccionarios con los siguientes campos: `product_id`, `quantity` y `unit_price`, por ejemplo: [{ "product_id": "123", "quantity": 1, "unit_price": 100 }, { "product_id": "456", "quantity": 2, "unit_price": 200 }].
 
         Args:
-            store_id (str): Identificador de la tienda para mapear la tabla de compras.
-            customer_phone (str): Teléfono del cliente asociado a la compra.
-            customer_address (str): Dirección del cliente asociada a la compra.
-            products (Any): Lista de productos o JSON string con productos a comprar.
+            store_id (str): Identificador de la tienda.
+            client_phone (str): Celular del cliente.
+            client_full_name (str): Nombre completo del cliente.
+            client_document (str): Cédula del cliente.
+            client_address (str): Dirección del cliente.
+            client_city (str): Ciudad del cliente.
+            client_email (Optional[str]): Correo del cliente.
+            products (Any): Lista o JSON string con items a comprar.
+                Cada item debe incluir: `product_id` (hash), `quantity` (>0) y `unit_price` (>=0).
 
         Returns:
             Dict[str, Any]: Resultado con la compra persistida.
@@ -69,35 +78,54 @@ def register_db_tools(server: FastMCP) -> None:
                     "error": "Debe proporcionar una lista 'products' con al menos un item",
                 }
 
-            if not customer_phone or len(customer_phone.strip()) < 10:
+            if not client_phone or len(client_phone.strip()) < 10:
                 return {
                     "success": False,
                     "error": "El teléfono del cliente es inválido (mínimo 10 caracteres)",
                 }
 
-            if not customer_address or len(customer_address.strip()) < 5:
+            if not client_address or len(client_address.strip()) < 5:
                 return {
                     "success": False,
                     "error": "La dirección del cliente es inválida (mínimo 5 caracteres)",
                 }
 
+            if not client_full_name or len(client_full_name.strip()) < 3:
+                return {"success": False, "error": "El nombre completo es inválido"}
+
+            if not client_document or len(client_document.strip()) < 5:
+                return {"success": False, "error": "La cédula es inválida"}
+
+            if not client_city or len(client_city.strip()) < 2:
+                return {"success": False, "error": "La ciudad es inválida"}
+
             # Validar estructura básica de los items sin consultar BD
             requested_items: List[Dict[str, Any]] = []
+            total_amount: float = 0.0
             for i, item in enumerate(products_list):
-                pid = int(item.get("product_id", 0)) if item and isinstance(item, dict) else 0
+                pid = str(item.get("product_id", "")).strip() if item and isinstance(item, dict) else ""
                 qty = int(item.get("quantity", 0)) if item and isinstance(item, dict) else 0
-                if pid <= 0 or qty <= 0:
-                    return {"success": False, "error": f"Cada item debe incluir product_id>0 y quantity>0. Item {i}: pid={pid}, qty={qty}"}
-                requested_items.append({"product_id": pid, "quantity": qty})
+                try:
+                    unit_price = float(item.get("unit_price", None)) if item and isinstance(item, dict) else None
+                except (TypeError, ValueError):
+                    unit_price = None
+                if not pid or qty <= 0 or unit_price is None or unit_price < 0:
+                    return {"success": False, "error": f"Cada item debe incluir product_id (hash), quantity>0 y unit_price>=0. Item {i}: pid='{pid}', qty={qty}, unit_price={unit_price}"}
+                requested_items.append({"product_id": pid, "quantity": qty, "unit_price": unit_price})
+                total_amount += unit_price * qty
 
             # Persistir directamente sin validaciones de BD
             saved = purchase_service.save_purchase(
                 store_id=store_id,
                 purchase={
-                    "total_amount": 0.0,  # Total será calculado externamente si es necesario
-                    "customer_phone": customer_phone.strip(),
-                    "customer_address": customer_address.strip(),
-                    "products": requested_items,  # Guardar tal como viene
+                    "total_amount": float(total_amount),
+                    "client_phone": client_phone.strip(),
+                    "client_full_name": client_full_name.strip(),
+                    "client_document": client_document.strip(),
+                    "client_address": client_address.strip(),
+                    "client_city": client_city.strip(),
+                    "client_email": (client_email.strip().lower() if client_email else None),
+                    "products": requested_items,
                 },
             )
 

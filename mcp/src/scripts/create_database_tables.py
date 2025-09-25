@@ -266,7 +266,7 @@ def list_models() -> None:
     print("\n📋 Modelos disponibles:")
     print(f"  • User -> tabla: users")
     print(f"  • Product -> tabla: products")
-    print(f"  • ProductSale -> tabla: product_sales")
+    print(f"  • ProductSale -> tabla: ventas_mauricio")
     print(f"  • Log -> tabla: logs")
 
     print(f"\n📊 Resumen:")
