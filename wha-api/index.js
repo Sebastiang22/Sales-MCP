@@ -302,7 +302,7 @@ async function connectToWhatsApp(sessionName, socketVariable, isConnectingVariab
             // Configuraciones adicionales para mantener la conexión estable
             keepAliveIntervalMs: 25000, // Enviar keep-alive cada 25 segundos
             // Configuración del navegador para evitar conflictos
-            browser: [`ColombianGirls Bot ${sessionName}`, 'Chrome', '1.0.0'],
+            browser: [`Sales MCP Bot ${sessionName}`, 'Chrome', '1.0.0'],
             // Configuración de sincronización
             syncFullHistory: false,
             // Configuración de mensajes
@@ -905,6 +905,221 @@ app.post('/api/send-message', async (req, res) => {
         }
     } catch (error) {
         return res.status(500).json({ success: false, error: error.message || 'Error general' });
+    }
+});
+
+/**
+ * Endpoint para enviar mensaje de texto a un grupo de WhatsApp
+ */
+app.post('/api/send-group-message', async (req, res) => {
+    try {
+        const { group_id, message, session } = req.body;
+        
+        if (!group_id || !message) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Faltan datos: group_id y message son requeridos' 
+            });
+        }
+
+        // Validar que group_id sea una cadena de texto válida
+        if (typeof group_id !== 'string' || group_id.trim() === '') {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'El group_id debe ser una cadena de texto válida' 
+            });
+        }
+
+        // Formatear el JID del grupo
+        let groupJid = group_id.trim();
+        if (!groupJid.endsWith('@g.us')) {
+            groupJid = `${groupJid}@g.us`;
+        }
+
+        // Validar formato del JID de grupo
+        const groupIdPattern = /^\d+@g\.us$/;
+        if (!groupIdPattern.test(groupJid)) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'El group_id debe tener el formato: XXXXXXXXX@g.us o solo el número' 
+            });
+        }
+
+        const activeSocket = getSocketForDelivery('', session); // Para grupos no necesitamos phone específico
+        
+        if (!activeSocket) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'WhatsApp no está conectado' 
+            });
+        }
+
+        console.log(`👥 Enviando mensaje a grupo ${groupJid}`);
+        console.log(`📝 Mensaje: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`);
+
+        try {
+            await Promise.race([
+                activeSocket.sendMessage(groupJid, { text: message }),
+                new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Timeout al enviar mensaje a grupo')), 25000)
+                )
+            ]);
+            
+            return res.json({ 
+                success: true, 
+                message: 'Mensaje enviado correctamente al grupo',
+                data: {
+                    groupJid: groupJid,
+                    messageLength: message.length,
+                    timestamp: new Date().toISOString()
+                }
+            });
+        } catch (error) {
+            console.error(`❌ Error al enviar mensaje al grupo ${groupJid}:`, error);
+            return res.status(500).json({ 
+                success: false, 
+                error: error.message || 'Error al enviar mensaje al grupo' 
+            });
+        }
+    } catch (error) {
+        console.error('❌ Error general en send-group-message:', error);
+        return res.status(500).json({ 
+            success: false, 
+            error: error.message || 'Error general al procesar solicitud' 
+        });
+    }
+});
+
+/**
+ * Endpoint para obtener información (metadatos) de un grupo de WhatsApp
+ */
+app.get('/api/group-info/:groupId', async (req, res) => {
+    try {
+        const { groupId } = req.params;
+        const { session } = req.query;
+        
+        if (!groupId) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'group_id es requerido' 
+            });
+        }
+
+        // Formatear el JID del grupo
+        let groupJid = groupId.trim();
+        if (!groupJid.endsWith('@g.us')) {
+            groupJid = `${groupJid}@g.us`;
+        }
+
+        const activeSocket = getSocketForDelivery('', session);
+        
+        if (!activeSocket) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'WhatsApp no está conectado' 
+            });
+        }
+
+        console.log(`📋 Obteniendo información del grupo ${groupJid}`);
+
+        try {
+            const metadata = await activeSocket.groupMetadata(groupJid);
+            
+            return res.json({
+                success: true,
+                data: {
+                    id: metadata.id,
+                    subject: metadata.subject,
+                    description: metadata.desc || '',
+                    owner: metadata.owner || '',
+                    creation: metadata.creation,
+                    size: metadata.size,
+                    participants: metadata.participants.map(p => ({
+                        id: p.id,
+                        admin: p.admin || null,
+                        isSuperAdmin: p.isSuperAdmin || false
+                    })),
+                    totalParticipants: metadata.participants.length
+                }
+            });
+            
+        } catch (metadataError) {
+            console.error('❌ Error obteniendo información del grupo:', metadataError);
+            return res.status(404).json({
+                success: false,
+                error: 'Grupo no encontrado o sin acceso',
+                details: metadataError.message
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Error general en group-info:', error);
+        return res.status(500).json({ 
+            success: false, 
+            error: error.message || 'Error al obtener información del grupo' 
+        });
+    }
+});
+
+/**
+ * Endpoint para obtener la lista de grupos donde participa el bot
+ */
+app.get('/api/get-groups', async (req, res) => {
+    try {
+        const { session } = req.query;
+        const activeSocket = getSocketForDelivery('', session);
+        
+        if (!activeSocket) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'WhatsApp no está conectado' 
+            });
+        }
+
+        console.log('📋 Obteniendo lista de grupos...');
+
+        try {
+            // Obtener los chats del store si está disponible
+            const chats = activeSocket.store?.chats?.all() || [];
+            const groups = chats.filter(chat => chat.id.endsWith('@g.us'));
+            
+            const groupsList = groups.map(group => ({
+                id: group.id,
+                name: group.name || 'Sin nombre',
+                participants: group.participants?.length || 0,
+                description: group.desc || '',
+                owner: group.owner || 'Desconocido'
+            }));
+            
+            console.log(`📊 Se encontraron ${groupsList.length} grupos`);
+            
+            return res.json({ 
+                success: true, 
+                data: {
+                    groups: groupsList,
+                    total: groupsList.length
+                }
+            });
+            
+        } catch (storeError) {
+            console.error('❌ Error accediendo al store:', storeError);
+            
+            // Si no hay store disponible, devolver respuesta informativa
+            return res.json({ 
+                success: true, 
+                data: {
+                    groups: [],
+                    total: 0,
+                    message: 'No se pudieron obtener los grupos del store. Envía un mensaje a un grupo para que aparezca en la lista.'
+                }
+            });
+        }
+    } catch (error) {
+        console.error('❌ Error general en get-groups:', error);
+        return res.status(500).json({ 
+            success: false, 
+            error: error.message || 'Error al obtener lista de grupos' 
+        });
     }
 });
 
