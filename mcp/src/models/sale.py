@@ -24,7 +24,7 @@ class ProductSale(BaseModel, table=True):
         customer_address: Dirección del cliente
     """
 
-    __tablename__ = "product_sales"
+    __tablename__ = "ventas_mauricio"
 
     product_id: int = Field(
         foreign_key="products.id",
