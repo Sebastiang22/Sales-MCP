@@ -909,11 +909,11 @@ app.post('/api/send-message', async (req, res) => {
 });
 
 /**
- * Endpoint para enviar mensaje de texto o imagen a un grupo de WhatsApp
+ * Endpoint para enviar mensaje de texto o imagen (base64) a un grupo de WhatsApp
  */
 app.post('/api/send-group-message', async (req, res) => {
     try {
-        const { group_id, message, imageUrl, session } = req.body;
+        const { group_id, message, imageBase64, session } = req.body;
         
         if (!group_id || !message) {
             return res.status(400).json({ 
@@ -961,61 +961,36 @@ app.post('/api/send-group-message', async (req, res) => {
             let messageType = 'text';
             
             // Verificar si se debe enviar imagen
-            if (imageUrl && imageUrl.trim()) {
+            if (imageBase64 && imageBase64.trim()) {
                 messageType = 'image';
-                console.log(`📸 Enviando imagen a grupo: ${imageUrl}`);
+                console.log(`📸 Enviando imagen en base64 a grupo`);
                 console.log(`📝 Caption: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`);
                 
-                // Procesar la URL para manejar casos especiales (Google Drive, etc.)
-                let processedImageUrl = processImageUrl(imageUrl);
-                if (processedImageUrl !== imageUrl) {
-                    console.log(`🔄 URL procesada: ${imageUrl} -> ${processedImageUrl}`);
-                }
-                
-                // Verificar si la URL es válida antes de enviarla
-                if (processedImageUrl.startsWith('http')) {
-                    try {
-                        console.log(`🔍 Verificando URL de imagen: ${processedImageUrl}`);
-                        
-                        // Verificar que la imagen sea accesible
-                        const response = await Promise.race([
-                            axios.get(processedImageUrl, {
-                                responseType: 'arraybuffer',
-                                timeout: 15000,
-                                maxRedirects: 5,
-                                validateStatus: function (status) {
-                                    return status >= 200 && status < 300;
-                                }
-                            }),
-                            new Promise((_, reject) => 
-                                setTimeout(() => reject(new Error('Timeout al verificar la imagen')), 15000)
-                            )
-                        ]);
-                        
-                        // Verificar si la respuesta contiene un tipo de contenido de imagen
-                        const contentType = response.headers['content-type'];
-                        console.log(`📊 Content-Type recibido: ${contentType}`);
-                        
-                        if (!contentType || !contentType.startsWith('image/')) {
-                            throw new Error(`El recurso no es una imagen válida: ${contentType}`);
-                        }
-                        
-                        console.log(`✅ Imagen válida: ${contentType} (${(response.data.length / 1024).toFixed(2)} KB)`);
-                        
-                    } catch (urlError) {
-                        console.error('❌ Error al verificar la URL de la imagen:', urlError.message);
-                        throw new Error(`URL de imagen inválida o inaccesible: ${urlError.message}`);
+                try {
+                    // Validar que el string base64 no esté vacío
+                    if (!imageBase64 || typeof imageBase64 !== 'string' || imageBase64.trim() === '') {
+                        throw new Error('La imagen en base64 es inválida o está vacía');
                     }
-                } else if (!fs.existsSync(imageUrl)) {
-                    // Si es una ruta local, verificar que el archivo exista
-                    throw new Error(`El archivo de imagen no existe en la ruta: ${imageUrl}`);
+                    
+                    // Convertir la imagen de base64 a buffer
+                    const imageBuffer = Buffer.from(imageBase64, 'base64');
+                    
+                    if (imageBuffer.length === 0) {
+                        throw new Error('El buffer de la imagen está vacío - base64 inválido');
+                    }
+                    
+                    console.log(`📊 Imagen base64 procesada: ${(imageBuffer.length / 1024).toFixed(2)} KB`);
+                    
+                    // Construir el mensaje de imagen con el caption
+                    messageToSend = {
+                        image: imageBuffer,
+                        caption: message.trim()
+                    };
+                    
+                } catch (base64Error) {
+                    console.error('❌ Error al procesar imagen base64:', base64Error.message);
+                    throw new Error(`Error al procesar imagen base64: ${base64Error.message}`);
                 }
-                
-                // Construir el mensaje de imagen con el caption
-                messageToSend = {
-                    image: { url: processedImageUrl },
-                    caption: message.trim()
-                };
             } else {
                 console.log(`📝 Enviando texto a grupo: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`);
                 messageToSend = { text: message };
@@ -1035,15 +1010,15 @@ app.post('/api/send-group-message', async (req, res) => {
                     groupJid: groupJid,
                     messageType: messageType,
                     messageLength: message.length,
-                    imageUrl: imageUrl || null,
+                    imageBase64: imageBase64 ? `[${Buffer.from(imageBase64, 'base64').length} bytes]` : null,
                     timestamp: new Date().toISOString()
                 }
             });
         } catch (error) {
-            console.error(`❌ Error al enviar ${imageUrl ? 'imagen' : 'mensaje'} al grupo ${groupJid}:`, error);
+            console.error(`❌ Error al enviar ${imageBase64 ? 'imagen' : 'mensaje'} al grupo ${groupJid}:`, error);
             return res.status(500).json({ 
                 success: false, 
-                error: error.message || `Error al enviar ${imageUrl ? 'imagen' : 'mensaje'} al grupo` 
+                error: error.message || `Error al enviar ${imageBase64 ? 'imagen' : 'mensaje'} al grupo` 
             });
         }
     } catch (error) {
